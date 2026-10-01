@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>India Cricket Universe — T10 / T20 / T30</title>
+<style>
+:root{--navy:#0a1628;--navy2:#122038;--orange:#ff6a00;--white:#f3f6fb;--muted:#8fa1bd;--border:#22314d;
+padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--navy:#0a1628;--navy2:#122038;--white:#f3f6fb;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--navy);color:var(--white);font-family:system-ui,Segoe UI,Arial,sans-serif;min-height:100%}
+html,body{height:100%}
+#layout{display:flex;min-height:100vh}
+#side{width:230px;background:var(--navy2);border-right:1px solid var(--border);padding:16px 0;flex-shrink:0;overflow-x:auto}
+#side h1{font-size:15px;padding:0 16px 16px;color:var(--orange);border-bottom:1px solid var(--border);margin:0 0 8px}
+#side button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--muted);padding:10px 16px;cursor:pointer;font-size:13.5px}
+#side button:hover,#side button.active{background:#1a2b4a;color:var(--white)}
+#main{flex:1;padding:20px;overflow-x:auto;max-width:100%}
+h2{color:var(--orange);margin-top:0}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+th,td{border:1px solid var(--border);padding:6px 8px;text-align:left}
+th{background:#152541;color:var(--orange)}
+.card{background:var(--navy2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px}
+.cards{display:flex;gap:10px;flex-wrap:wrap}
+.cards .card{flex:1;min-width:140px}
+.cards .card b{font-size:22px;display:block;color:var(--orange)}
+input,select{background:#0e1c33;border:1px solid var(--border);color:var(--white);padding:5px 7px;border-radius:4px;font-size:13px}
+button.btn{background:var(--orange);color:#111;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px}
+button.btn.secondary{background:#1a2b4a;color:var(--white)}
+button.btn.small{padding:3px 8px;font-size:12px}
+label{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.row>div{min-width:120px}
+.warn{color:#ffb347;font-size:12px}
+.badge{background:var(--orange);color:#111;border-radius:10px;padding:1px 7px;font-size:11px}
+a.link{color:var(--orange);cursor:pointer;text-decoration:underline}
+.tabs{display:flex;gap:6px;margin-bottom:10px;overflow-x:auto}
+.tabs button{white-space:nowrap}
+::-webkit-scrollbar{height:8px;width:8px}
+</style>
+</head>
+<body>
+<div id="layout">
+<div id="side">
+<h1>🏏 INDIA CRICKET UNIVERSE</h1>
+<div id="nav"></div>
+</div>
+<div id="main"></div>
+</div>
+<script>
+/* ================= DATA ================= */
+const LS_KEYS=['indiaPlayers','opponents','series','matches','settings'];
+let DB={indiaPlayers:[],opponents:[],series:[],matches:[],settings:{}};
+function loadAll(){LS_KEYS.forEach(k=>{const v=localStorage.getItem('t20u_'+k);DB[k]=v?JSON.parse(v):(k==='settings'?{}:[]);});}
+function saveAll(){LS_KEYS.forEach(k=>localStorage.setItem('t20u_'+k,JSON.stringify(DB[k])));}
+function uid(p){return p+'_'+Math.random().toString(36).slice(2,10);}
+function migrateData(){ // backward compatibility: old matches had no `format` field
+  let changed=false;
+  DB.matches.forEach(m=>{if(!m.format){m.format='T20';changed=true;}});
+  if(changed)saveAll();
+}
+loadAll();
+migrateData();
+
+/* ================= CRICKET LOGIC ================= */
+const FORMATS=['T10','T20','T30'];
+const MAX_OVERS={T10:10,T20:20,T30:30};
+function getMaxOvers(format){return MAX_OVERS[format]||20;}
+function getMaxBalls(format){return getMaxOvers(format)*6;}
+const MAX_BALLS={T10:60,T20:120,T30:180};
+function oversToBalls(overs){
+  overs=parseFloat(overs);if(isNaN(overs)||overs<0)return null;
+  const o=Math.floor(overs+1e-9);const b=Math.round((overs-o)*10);
+  if(b>5)return null; // invalid ball digit
+  return o*6+b;
+}
+function ballsToOvers(balls){if(balls==null||isNaN(balls))return '0.0';const o=Math.floor(balls/6);const b=balls%6;return o+'.'+b;}
+function canBat(p){return true;}
+function canBowl(p){return p.role==='Bowler'||p.role==='All-Rounder';}
+function economy(runs,balls){if(!balls)return 0;return runs/(balls/6);}
+const INTENSITY={'Series Match':1.00,'Quarter Final':1.25,'Semi Final':1.50,'Final':1.75};
+function matchesByFormat(fmt){return (!fmt||fmt==='ALL'||fmt==='All')?DB.matches:DB.matches.filter(m=>(m.format||'T20')===fmt);}
+function fmtBadge(f){return `<span class="badge">${f}</span>`;}
+
+/* ================= NAV ================= */
+const VIEWS=[['dashboard','Dashboard'],['players','Indian Players'],['opponents','Opponents'],
+['series','Series & Competitions'],['creatematch','Create Match'],['history','Match History'],
+['points','Points Table'],['orange','Orange Cap'],['purple','Purple Cap'],['battingrank','Batting Rankings'],
+['bowlingrank','Bowling Rankings'],['captaincy','Captaincy Records'],['stats','Statistics'],['settings','Settings']];
+let CUR='dashboard';let params={};
+function nav(v,p){CUR=v;params=p||{};render();}
+function renderNav(){
+  document.getElementById('nav').innerHTML=VIEWS.map(([id,label])=>
+    `<button class="${CUR===id?'active':''}" onclick="nav('${id}')">${label}</button>`).join('');
+}
+
+/* ================= STAT ENGINE ================= */
+function playerMatches(pid,format){return matchesByFormat(format).filter(m=>m.playingXI.some(x=>x.playerId===pid&&x.played));}
+function battingCareer(pid,format){
+  const ms=Array.isArray(format)?format:matchesByFormat(format);
+  let innings=0,runs=0,balls=0,notOuts=0,hs=0,fifties=0,hundreds=0,fours=0,sixes=0,matches=0;
+  ms.forEach(m=>{
+    const played=m.playingXI.find(x=>x.playerId===pid&&x.played);
+    if(!played)return;matches++;
+    const b=m.indianBatting.find(x=>x.playerId===pid);
+    if(b){innings++;runs+=b.runs;balls+=b.balls;fours+=b.fours;sixes+=b.sixes;
+      if(b.notOut)notOuts++;if(b.runs>hs)hs=b.runs;if(b.runs>=100)hundreds++;else if(b.runs>=50)fifties++;}
+  });
+  const dismissals=innings-notOuts;
+  return {matches,innings,runs,balls,notOuts,hs,fifties,hundreds,fours,sixes,dismissals,
+    avg:dismissals>0?(runs/dismissals):null, sr:balls>0?(runs/balls*100):null};
+}
+function bowlingCareer(pid,format){
+  const ms=Array.isArray(format)?format:matchesByFormat(format);
+  let innings=0,balls=0,maidens=0,runs=0,wkts=0,matches=0,best='-',w3=0,w4=0,w5=0;
+  ms.forEach(m=>{
+    const played=m.playingXI.find(x=>x.playerId===pid&&x.played);
+    if(!played)return;matches++;
+    const b=m.indianBowling.find(x=>x.playerId===pid);
+    if(b){innings++;balls+=b.balls;maidens+=b.maidens;runs+=b.runs;wkts+=b.wickets;
+      if(b.wickets>=5)w5++;else if(b.wickets>=4)w4++;else if(b.wickets>=3)w3++;
+      if(best==='-'||b.wickets>parseInt(best)||(b.wickets===parseInt(best)&&b.runs<parseInt(best.split('/')[1])))
+        best=b.wickets+'/'+b.runs;}
+  });
+  return {matches,innings,balls,maidens,runs,wkts,best,w3,w4,w5,
+    econ:balls>0?economy(runs,balls):null, avg:wkts>0?(runs/wkts):null};
+}
+function matchResult(m){
+  const ir=m.indiaScore.runs,or=m.oppScore.runs;
+  if(m.result&&m.result.type)return m.result;
+  if(ir>or)return {type:'won',text:'India won by '+(ir-or)+' runs'};
+  if(or>ir)return {type:'lost',text:'India lost by '+(10-m.indiaScore.wickets)+' wickets'};
+  return {type:'tie',text:'Match tied'};
+}
+function teamRunRate(runs,balls){return balls>0?runs/(balls/6):0;}
+function matchNRR(m){
+  const quota=MAX_BALLS[m.format||'T20'];
+  let indiaBalls=m.indiaScore.balls, oppBalls=m.oppScore.balls;
+  if(m.indiaScore.wickets>=10) indiaBalls=quota; // all out -> full format quota
+  if(m.oppScore.wickets>=10) oppBalls=quota;
+  const rf=teamRunRate(m.indiaScore.runs,indiaBalls);
+  const ra=teamRunRate(m.oppScore.runs,oppBalls);
+  return {rf,ra,indiaBalls,oppBalls};
+}
+
+/* Rankings with match-based decay, chronological */
+function computeRankings(kind,format){ // kind: 'bat' or 'bowl'; format: 'T10'/'T20'/'T30'/'All'
+  const players=DB.indiaPlayers.filter(p=>kind==='bat'?true:canBowl(p));
+  const state={};players.forEach(p=>state[p.id]={points:1000,lastMatch:null,missed:0,hasPlayed:false});
+  const ms=[...matchesByFormat(format)].sort((a,b)=>new Date(a.date)-new Date(b.date));
+  ms.forEach(m=>{
+    const intensity=m.intensityMultiplier||INTENSITY[m.stage]||1;
+    players.forEach(p=>{
+      const s=state[p.id];
+      const inXI=m.playingXI.find(x=>x.playerId===p.id&&x.played);
+      if(inXI){
+        let pts=0;
+        if(kind==='bat'){
+          const b=m.indianBatting.find(x=>x.playerId===p.id);
+          if(b){const sr=b.balls>0?(b.runs/b.balls*100):0;
+            pts=b.runs*1.0+b.fours*1.5+b.sixes*2.0+(sr>100?(sr-100)*0.2:0)+
+              (b.runs>=50?20:0)+(b.runs>=100?50:0)+(b.notOut?10:0);}
+        }else{
+          const bw=m.indianBowling.find(x=>x.playerId===p.id);
+          if(bw){const econ=bw.balls>0?economy(bw.runs,bw.balls):0;
+            pts=bw.wickets*25+bw.maidens*5+(econ<6&&bw.balls>0?(6-econ)*5:0)+
+              (bw.wickets>=3?20:0)+(bw.wickets>=4?35:0)+(bw.wickets>=5?50:0);}
+        }
+        s.points+=pts*intensity;s.missed=0;s.lastMatch=m.date;s.hasPlayed=true;
+      }else if(s.hasPlayed){
+        s.missed+=1;s.points*=0.98;
+      }
+    });
+  });
+  return players.map(p=>({player:p,...state[p.id]})).sort((a,b)=>b.points-a.points);
+}
+
+function captaincyRecord(cid,format){
+  const ms=matchesByFormat(format).filter(m=>m.captainId===cid).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  let wins=0,losses=0,ties=0,nr=0,runsFor=0,runsAg=0,ballsFor=0,ballsAg=0,points=0;
+  ms.forEach(m=>{
+    const r=matchResult(m);
+    if(r.type==='won'){wins++;points+=2;}else if(r.type==='lost'){losses++;}
+    else if(r.type==='tie'){ties++;points+=1;}else{nr++;points+=1;}
+    const n=matchNRR(m);runsFor+=m.indiaScore.runs;runsAg+=m.oppScore.runs;
+    ballsFor+=n.indiaBalls;ballsAg+=n.oppBalls;
+  });
+  const nrr=(teamRunRate(runsFor,ballsFor)-teamRunRate(runsAg,ballsAg));
+  const bat=battingCareer(cid,ms), bowl=bowlingCareer(cid,ms);
+  return {matches:ms.length,wins,losses,ties,nr,winPct:ms.length?((wins/ms.length)*100):0,points,nrr,bat,bowl,ms};
+}
+
+/* ================= RENDER ================= */
+function esc(s){return (s||'').toString().replace(/</g,'&lt;');}
+function fmt(n,d=2){return (n==null||isNaN(n))?'N/A':Number(n).toFixed(d);}
+
+function render(){
+  renderNav();
+  const m=document.getElementById('main');
+  const fns={dashboard:renderDashboard,players:renderPlayers,opponents:renderOpponents,series:renderSeries,
+    creatematch:renderCreateMatch,history:renderHistory,points:renderPoints,orange:renderOrange,purple:renderPurple,
+    battingrank:()=>renderRankView('bat'),bowlingrank:()=>renderRankView('bowl'),captaincy:renderCaptaincy,
+    stats:renderStats,settings:renderSettings,profile:renderPlayers};
+  m.innerHTML='';
+  (fns[CUR]||renderDashboard)(m);
+}
+
+function renderDashboard(m){
+  const fsel=params.format||'ALL';
+  const dms=matchesByFormat(fsel);
+  const totalRuns=dms.reduce((s,x)=>s+x.indianBatting.reduce((a,b)=>a+b.runs,0),0);
+  const totalWkts=dms.reduce((s,x)=>s+x.indianBowling.reduce((a,b)=>a+b.wickets,0),0);
+  const orange=[...DB.indiaPlayers].map(p=>({p,c:battingCareer(p.id,fsel)})).sort((a,b)=>b.c.runs-a.c.runs)[0];
+  const purple=[...DB.indiaPlayers].filter(canBowl).map(p=>({p,c:bowlingCareer(p.id,fsel)})).sort((a,b)=>b.c.wkts-a.c.wkts)[0];
+  m.innerHTML=`<h2>Dashboard</h2>
+  <div class="card"><label>Dashboard Format</label><select onchange="nav('dashboard',{format:this.value})">
+  ${['ALL',...FORMATS].map(f=>`<option value="${f}" ${fsel===f?'selected':''}>${f==='ALL'?'All Formats':f}</option>`).join('')}</select></div>
+  <div class="cards">
+    <div class="card">Indian Players<b>${DB.indiaPlayers.length}</b></div>
+    <div class="card">Opponent Teams<b>${DB.opponents.length}</b></div>
+    <div class="card">Series<b>${DB.series.length}</b></div>
+    <div class="card">${fsel==='ALL'?'':fsel+' '}Matches<b>${dms.length}</b></div>
+    <div class="card">Total India Runs<b>${totalRuns}</b></div>
+    <div class="card">Total India Wickets<b>${totalWkts}</b></div>
+  </div>
+  <div class="row">
+    <div class="card" style="flex:1"><h3>Orange Cap Leader</h3>${orange&&orange.c.runs?esc(orange.p.name)+' — '+orange.c.runs+' runs':'No data yet'}</div>
+    <div class="card" style="flex:1"><h3>Purple Cap Leader</h3>${purple&&purple.c.wkts?esc(purple.p.name)+' — '+purple.c.wkts+' wkts':'No data yet'}</div>
+  </div>
+  <p style="color:var(--muted);font-size:12px">Use the sidebar to manage players, create matches, and view rankings. See Settings to load demo data.</p>`;
+}
+
+/* --- Players --- */
+function renderPlayers(m){
+  m.innerHTML=`<h2>Indian Players</h2>
+  <div class="card"><div class="row">
+    <div><label>Name</label><input id="pname"></div>
+    <div><label>Role</label><select id="prole"><option>Batter</option><option>Bowler</option><option>All-Rounder</option><option>Wicketkeeper</option></select></div>
+    <div style="align-self:end"><button class="btn" onclick="addPlayer()">Add Player</button></div>
+  </div></div>
+  <table><tr><th>Name</th><th>Role</th><th>Active</th><th>Matches</th><th>Runs</th><th>Wkts</th><th>Actions</th></tr>
+  ${DB.indiaPlayers.map(p=>{const bc=battingCareer(p.id),bw=canBowl(p)?bowlingCareer(p.id):null;
+    return `<tr><td><a class="link" onclick="nav('profile',{playerId:'${p.id}'})">${esc(p.name)}</a></td>
+    <td>${p.role}</td><td>${p.active?'Active':'Inactive'}</td><td>${bc.matches}</td><td>${bc.runs}</td><td>${bw?bw.wkts:'-'}</td>
+    <td>
+    <button class="btn small secondary" onclick="editPlayer('${p.id}')">Edit</button>
+    <button class="btn small secondary" onclick="toggleActive('${p.id}')">${p.active?'Deactivate':'Activate'}</button>
+    <button class="btn small secondary" onclick="deletePlayer('${p.id}')">Delete</button>
+    </td></tr>`;}).join('')}
+  </table>`;
+  if(CUR==='profile'&&params.playerId)renderPlayerProfile(m,params.playerId);
+}
+window.nav=nav;
+function addPlayer(){
+  const name=document.getElementById('pname').value.trim();
+  const role=document.getElementById('prole').value;
+  if(!name)return alert('Enter a name');
+  DB.indiaPlayers.push({id:uid('p'),name,role,active:true});
+  saveAll();render();
+}
+function editPlayer(id){
+  const p=DB.indiaPlayers.find(x=>x.id===id);
+  const name=prompt('Name',p.name);if(name===null)return;
+  const role=prompt('Role (Batter/Bowler/All-Rounder/Wicketkeeper)',p.role);if(role===null)return;
+  if(!['Batter','Bowler','All-Rounder','Wicketkeeper'].includes(role))return alert('Invalid role');
+  p.name=name;p.role=role;saveAll();render();
+}
+function toggleActive(id){const p=DB.indiaPlayers.find(x=>x.id===id);p.active=!p.active;saveAll();render();}
+function deletePlayer(id){if(confirm('Delete this player? Historical match records will keep the name reference.')){DB.indiaPlayers=DB.indiaPlayers.filter(x=>x.id!==id);saveAll();render();}}
+
+let profileTab='ALL';
+function renderPlayerProfile(container,pid){
+  const p=DB.indiaPlayers.find(x=>x.id===pid);if(!p)return;
+  const f=profileTab;
+  const bat=battingCareer(pid,f),bowl=canBowl(p)?bowlingCareer(pid,f):null;
+  const rankBat=computeRankings('bat',f).find(r=>r.player.id===pid);
+  const rankBowl=canBowl(p)?computeRankings('bowl',f).find(r=>r.player.id===pid):null;
+  const cap=captaincyRecord(pid,f);
+  const mh=matchesByFormat(f).filter(m=>m.playingXI.some(x=>x.playerId===pid&&x.played)).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const div=document.createElement('div');div.className='card';
+  div.innerHTML=`<h3>${esc(p.name)} <span class="badge">${p.role}</span></h3>
+  <div class="tabs">${['T10','T20','T30','ALL'].map(t=>`<button class="btn small ${profileTab===t?'':'secondary'}" onclick="profileTab='${t}';render()">${t==='ALL'?'Overall':t}</button>`).join('')}</div>
+  <p>${f==='ALL'?'Overall':f} Batting Rank Points: ${fmt(rankBat?rankBat.points:1000,1)} | Matches Missed: ${rankBat?rankBat.missed:0}
+  ${rankBowl?' | Bowling Rank Points: '+fmt(rankBowl.points,1):''}</p>
+  <h4>${f==='ALL'?'Overall':f} Batting</h4>
+  <table><tr><th>M</th><th>Inn</th><th>Runs</th><th>Avg</th><th>SR</th><th>HS</th><th>50s</th><th>100s</th><th>4s</th><th>6s</th></tr>
+  <tr><td>${bat.matches}</td><td>${bat.innings}</td><td>${bat.runs}</td><td>${fmt(bat.avg)}</td><td>${fmt(bat.sr)}</td><td>${bat.hs}</td><td>${bat.fifties}</td><td>${bat.hundreds}</td><td>${bat.fours}</td><td>${bat.sixes}</td></tr></table>
+  ${bowl?`<h4>${f==='ALL'?'Overall':f} Bowling</h4><table><tr><th>M</th><th>Inn</th><th>Overs</th><th>Runs</th><th>Wkts</th><th>Econ</th><th>Avg</th><th>Best</th></tr>
+  <tr><td>${bowl.matches}</td><td>${bowl.innings}</td><td>${ballsToOvers(bowl.balls)}</td><td>${bowl.runs}</td><td>${bowl.wkts}</td><td>${fmt(bowl.econ)}</td><td>${fmt(bowl.avg)}</td><td>${bowl.best}</td></tr></table>`:'<p>No bowling record — player is not eligible to bowl.</p>'}
+  ${cap.matches?`<h4>${f==='ALL'?'Overall':f} Captaincy</h4><p>Captained ${cap.matches} | Won ${cap.wins} | Lost ${cap.losses} | Win% ${fmt(cap.winPct,1)} | NRR ${fmt(cap.nrr)}</p>`:''}
+  <h4>Match History ${f==='ALL'?'':'('+f+')'}</h4>
+  <table><tr><th>Date</th><th>Format</th><th>Opponent</th><th>Result</th></tr>
+  ${mh.map(m=>{const opp=DB.opponents.find(o=>o.id===m.opponentId);return `<tr><td>${m.date}</td><td>${m.format||'T20'}</td><td>${esc(opp?opp.short:'?')}</td><td>${matchResult(m).text}</td></tr>`;}).join('')||'<tr><td colspan="4">No matches in this format</td></tr>'}</table>
+  <button class="btn secondary" onclick="nav('players')">Back</button>`;
+  container.appendChild(div);
+}
+
+/* --- Opponents --- */
+function renderOpponents(m){
+  m.innerHTML=`<h2>Opponent Teams</h2>
+  <div class="card"><div class="row"><div><label>Team Name</label><input id="oname"></div>
+  <div><label>Short</label><input id="oshort" maxlength="4"></div>
+  <div style="align-self:end"><button class="btn" onclick="addOpponent()">Add Team</button></div></div></div>
+  <table><tr><th>Name</th><th>Short</th><th></th></tr>
+  ${DB.opponents.map(o=>`<tr><td>${esc(o.name)}</td><td>${esc(o.short)}</td><td><button class="btn small secondary" onclick="deleteOpponent('${o.id}')">Delete</button></td></tr>`).join('')}</table>`;
+}
+function addOpponent(){
+  const name=document.getElementById('oname').value.trim(),short=document.getElementById('oshort').value.trim().toUpperCase();
+  if(!name)return alert('Enter a team name');
+  DB.opponents.push({id:uid('o'),name,short:short||name.slice(0,3).toUpperCase()});saveAll();render();
+}
+function deleteOpponent(id){if(confirm('Delete team?')){DB.opponents=DB.opponents.filter(x=>x.id!==id);saveAll();render();}}
+
+/* --- Series --- */
+function renderSeries(m){
+  m.innerHTML=`<h2>Series & Competitions</h2>
+  <div class="card"><div class="row">
+  <div><label>Name</label><input id="sname"></div>
+  <div><label>Type</label><select id="stype"><option>Bilateral</option><option>Tournament</option></select></div>
+  <div><label>Start</label><input type="date" id="sstart"></div>
+  <div><label>End</label><input type="date" id="send"></div>
+  <div style="align-self:end"><button class="btn" onclick="addSeries()">Add Series</button></div>
+  </div></div>
+  <table><tr><th>Name</th><th>Type</th><th>Start</th><th>End</th><th></th></tr>
+  ${DB.series.map(s=>`<tr><td><a class="link" onclick="nav('points',{seriesId:'${s.id}'})">${esc(s.name)}</a></td><td>${s.type}</td><td>${s.start||''}</td><td>${s.end||''}</td>
+  <td><button class="btn small secondary" onclick="deleteSeries('${s.id}')">Delete</button></td></tr>`).join('')}</table>`;
+}
+function addSeries(){
+  const name=document.getElementById('sname').value.trim();
+  if(!name)return alert('Enter a series name');
+  DB.series.push({id:uid('s'),name,type:document.getElementById('stype').value,
+    start:document.getElementById('sstart').value,end:document.getElementById('send').value});
+  saveAll();render();
+}
+function deleteSeries(id){if(confirm('Delete series?')){DB.series=DB.series.filter(x=>x.id!==id);saveAll();render();}}
+
+/* --- Create Match --- */
+let draftMatch=null;
+function newDraft(){
+  draftMatch={id:uid('m'),date:new Date().toISOString().slice(0,10),format:'T20',seriesId:'',opponentId:'',stage:'Series Match',
+    captainId:'',playingXI:[],indiaScore:{runs:0,wickets:0,balls:0},oppScore:{runs:0,wickets:0,balls:0},
+    indianBatting:[],indianBowling:[]};
+}
+function renderCreateMatch(m){
+  if(!draftMatch)newDraft();
+  const d=draftMatch;
+  if(!DB.opponents.length||!DB.indiaPlayers.length){
+    m.innerHTML=`<h2>Create Match</h2><p class="warn">Add at least one Opponent Team and some Indian Players first.</p>`;return;
+  }
+  const intensity=INTENSITY[d.stage];
+  const xiIds=d.playingXI.filter(x=>x.played).map(x=>x.playerId);
+  const bowlEligible=DB.indiaPlayers.filter(p=>xiIds.includes(p.id)&&canBowl(p));
+  m.innerHTML=`<h2>Create Match — India vs [Opponent] <span class="badge">${d.format}</span></h2>
+  <div class="card">
+  <div class="row">
+    <div><label>Format</label><select onchange="draftMatch.format=this.value;render()">
+      ${FORMATS.map(f=>`<option ${d.format===f?'selected':''}>${f}</option>`).join('')}</select></div>
+    <div><label>Opponent</label><select id="mopp" onchange="draftMatch.opponentId=this.value">
+      <option value="">Select</option>${DB.opponents.map(o=>`<option value="${o.id}" ${d.opponentId===o.id?'selected':''}>${esc(o.name)}</option>`).join('')}</select></div>
+    <div><label>Series</label><select id="mser" onchange="draftMatch.seriesId=this.value">
+      <option value="">None</option>${DB.series.map(s=>`<option value="${s.id}" ${d.seriesId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div>
+    <div><label>Date</label><input type="date" value="${d.date}" onchange="draftMatch.date=this.value"></div>
+    <div><label>Stage</label><select onchange="draftMatch.stage=this.value;render()">
+      ${Object.keys(INTENSITY).map(s=>`<option ${d.stage===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    <div><label>Intensity</label><input disabled value="${intensity.toFixed(2)}x"></div>
+    <div><label>Max Overs</label><input disabled value="${getMaxOvers(d.format)}.0"></div>
+  </div></div>
+
+  <div class="card"><h3>India Playing XI</h3>
+  <table><tr><th>Played</th><th>Player</th><th>Role</th><th>Captain</th></tr>
+  ${DB.indiaPlayers.filter(p=>p.active).map(p=>{
+    const xi=d.playingXI.find(x=>x.playerId===p.id)||{playerId:p.id,played:false,captain:false};
+    return `<tr><td><input type="checkbox" ${xi.played?'checked':''} onchange="toggleXI('${p.id}',this.checked)"></td>
+    <td>${esc(p.name)}</td><td>${p.role}</td>
+    <td><input type="checkbox" ${d.captainId===p.id?'checked':''} onchange="setCaptain('${p.id}',this.checked)"></td></tr>`;
+  }).join('')}</table>
+  <p class="warn">${xiIds.length!==11?'Warning: Playing XI has '+xiIds.length+' players (expected 11). You may still save while building the match.':'11 players selected.'}</p>
+  </div>
+
+  <div class="card"><h3>India Score</h3>
+  <div class="row">
+    <div><label>Runs</label><input type="number" value="${d.indiaScore.runs}" onchange="draftMatch.indiaScore.runs=+this.value"></div>
+    <div><label>Wickets</label><input type="number" min="0" max="10" value="${d.indiaScore.wickets}" onchange="draftMatch.indiaScore.wickets=+this.value"></div>
+    <div><label>Overs (max ${getMaxOvers(d.format)}.0)</label><input value="${ballsToOvers(d.indiaScore.balls)}" onchange="setBalls('india',this.value)"></div>
+  </div>
+  <h4>Indian Batting</h4>
+  <table><tr><th>Player</th><th>Runs</th><th>Balls</th><th>4s</th><th>6s</th><th>Not Out</th><th></th></tr>
+  ${d.indianBatting.map((b,i)=>{const pl=DB.indiaPlayers.find(x=>x.id===b.playerId);
+    return `<tr><td>${esc(pl?pl.name:'?')}</td><td>${b.runs}</td><td>${b.balls}</td><td>${b.fours}</td><td>${b.sixes}</td><td>${b.notOut?'Yes':'No'}</td>
+    <td><button class="btn small secondary" onclick="removeBatting(${i})">Remove</button></td></tr>`;}).join('')}</table>
+  <div class="row">
+    <div><label>Player</label><select id="bat_p">${xiIds.map(id=>{const p=DB.indiaPlayers.find(x=>x.id===id);return `<option value="${id}">${esc(p.name)}</option>`;}).join('')}</select></div>
+    <div><label>Runs</label><input type="number" id="bat_r" min="0" value="0"></div>
+    <div><label>Balls</label><input type="number" id="bat_b" min="0" value="0"></div>
+    <div><label>4s</label><input type="number" id="bat_4" min="0" value="0"></div>
+    <div><label>6s</label><input type="number" id="bat_6" min="0" value="0"></div>
+    <div><label>Not Out</label><input type="checkbox" id="bat_no"></div>
+    <div style="align-self:end"><button class="btn" onclick="addBatting()">Add Batter</button></div>
+  </div></div>
+
+  <div class="card"><h3>Opponent Score</h3>
+  <div class="row">
+    <div><label>Runs</label><input type="number" value="${d.oppScore.runs}" onchange="draftMatch.oppScore.runs=+this.value"></div>
+    <div><label>Wickets</label><input type="number" min="0" max="10" value="${d.oppScore.wickets}" onchange="draftMatch.oppScore.wickets=+this.value"></div>
+    <div><label>Overs (max ${getMaxOvers(d.format)}.0)</label><input value="${ballsToOvers(d.oppScore.balls)}" onchange="setBalls('opp',this.value)"></div>
+  </div>
+  <h4>Indian Bowling</h4>
+  <table><tr><th>Player</th><th>Overs</th><th>Maidens</th><th>Runs</th><th>Wkts</th><th>Econ</th><th></th></tr>
+  ${d.indianBowling.map((b,i)=>{const pl=DB.indiaPlayers.find(x=>x.id===b.playerId);
+    return `<tr><td>${esc(pl?pl.name:'?')}</td><td>${ballsToOvers(b.balls)}</td><td>${b.maidens}</td><td>${b.runs}</td><td>${b.wickets}</td><td>${fmt(economy(b.runs,b.balls))}</td>
+    <td><button class="btn small secondary" onclick="removeBowling(${i})">Remove</button></td></tr>`;}).join('')}</table>
+  <div class="row">
+    <div><label>Player (bowl-eligible only)</label><select id="bowl_p">${bowlEligible.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+    <div><label>Overs</label><input id="bowl_o" value="4.0"></div>
+    <div><label>Maidens</label><input type="number" id="bowl_m" min="0" value="0"></div>
+    <div><label>Runs</label><input type="number" id="bowl_r" min="0" value="0"></div>
+    <div><label>Wkts</label><input type="number" id="bowl_w" min="0" max="10" value="0"></div>
+    <div style="align-self:end"><button class="btn" onclick="addBowling()">Add Bowler</button></div>
+  </div></div>
+  <button class="btn" onclick="saveMatch()">Save Match</button>
+  <button class="btn secondary" onclick="newDraft();render()">Reset Form</button>`;
+}
+function toggleXI(pid,played){
+  let x=draftMatch.playingXI.find(x=>x.playerId===pid);
+  if(!x){x={playerId:pid,played:false,captain:false};draftMatch.playingXI.push(x);}
+  x.played=played;
+  if(!played&&draftMatch.captainId===pid)draftMatch.captainId='';
+  render();
+}
+function setCaptain(pid,checked){
+  if(checked){
+    const xi=draftMatch.playingXI.find(x=>x.playerId===pid);
+    if(!xi||!xi.played){alert('Captain must be in the Playing XI (Played=true).');render();return;}
+    draftMatch.captainId=pid;
+  }else if(draftMatch.captainId===pid)draftMatch.captainId='';
+  render();
+}
+function setBalls(which,val){
+  const b=oversToBalls(val);const max=getMaxBalls(draftMatch.format);
+  if(b===null){alert('Invalid overs. Ball digit must be 0-5 (e.g. 4.6 is invalid).');render();return;}
+  if(b>max){alert('Overs cannot exceed '+getMaxOvers(draftMatch.format)+'.0 in a '+draftMatch.format+' innings.');render();return;}
+  if(which==='india')draftMatch.indiaScore.balls=b;else draftMatch.oppScore.balls=b;
+}
+function addBatting(){
+  const pid=document.getElementById('bat_p').value;
+  if(!pid)return alert('Select a player. Add players to the Playing XI first.');
+  const runs=+document.getElementById('bat_r').value,balls=+document.getElementById('bat_b').value,
+    f=+document.getElementById('bat_4').value,s=+document.getElementById('bat_6').value,
+    notOut=document.getElementById('bat_no').checked;
+  if(runs<0||balls<0||f<0||s<0)return alert('Values cannot be negative.');
+  if(f*4+s*6>runs)alert('Warning: 4s and 6s runs exceed total runs — entry saved anyway, please review.');
+  if(draftMatch.indianBatting.find(x=>x.playerId===pid))return alert('Player already has a batting entry.');
+  draftMatch.indianBatting.push({playerId:pid,runs,balls,fours:f,sixes:s,notOut});
+  render();
+}
+function removeBatting(i){draftMatch.indianBatting.splice(i,1);render();}
+function addBowling(){
+  const pid=document.getElementById('bowl_p').value;
+  if(!pid)return alert('No bowl-eligible player available. Only Bowlers/All-Rounders in the Playing XI can bowl.');
+  const p=DB.indiaPlayers.find(x=>x.id===pid);
+  if(!canBowl(p))return alert('This player is not eligible to bowl (Batter/Wicketkeeper).');
+  const balls=oversToBalls(document.getElementById('bowl_o').value);
+  if(balls===null)return alert('Invalid overs format.');
+  if(balls>getMaxBalls(draftMatch.format))return alert('Overs cannot exceed '+getMaxOvers(draftMatch.format)+'.0 for a '+draftMatch.format+' innings.');
+  const m=+document.getElementById('bowl_m').value,r=+document.getElementById('bowl_r').value,w=+document.getElementById('bowl_w').value;
+  if(m<0||r<0||w<0)return alert('Values cannot be negative.');
+  if(w>10)return alert('Wickets cannot exceed 10.');
+  if(draftMatch.indianBowling.find(x=>x.playerId===pid))return alert('Player already has a bowling entry.');
+  draftMatch.indianBowling.push({playerId:pid,balls,maidens:m,runs:r,wickets:w});
+  render();
+}
+function removeBowling(i){draftMatch.indianBowling.splice(i,1);render();}
+function saveMatch(){
+  const d=draftMatch;
+  if(!d.opponentId)return alert('Select an opponent.');
+  if(!d.captainId)return alert('Select exactly one captain from the Playing XI.');
+  d.intensityMultiplier=INTENSITY[d.stage];
+  d.result=matchResult(d);
+  DB.matches.push(JSON.parse(JSON.stringify(d)));
+  saveAll();newDraft();alert('Match saved.');nav('history');
+}
+
+/* --- History --- */
+function renderHistory(m){
+  const fsel=params.format||'ALL';
+  const ms=[...matchesByFormat(fsel)].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  m.innerHTML=`<h2>Match History</h2>
+  <div class="card"><label>Format</label><select onchange="nav('history',{format:this.value})">
+  ${['ALL',...FORMATS].map(f=>`<option value="${f}" ${fsel===f?'selected':''}>${f==='ALL'?'All Formats':f}</option>`).join('')}</select></div>
+  <table><tr><th>Date</th><th>Format</th><th>Opponent</th><th>Series</th><th>Stage</th><th>India</th><th>Opp</th><th>Result</th><th>Captain</th></tr>
+  ${ms.map(mt=>{
+    const opp=DB.opponents.find(o=>o.id===mt.opponentId);const ser=DB.series.find(s=>s.id===mt.seriesId);
+    const cap=DB.indiaPlayers.find(p=>p.id===mt.captainId);
+    return `<tr><td>${mt.date}</td><td>${mt.format||'T20'}</td><td>${opp?esc(opp.short):'?'}</td><td>${ser?esc(ser.name):'-'}</td><td>${mt.stage}</td>
+    <td>${mt.indiaScore.runs}/${mt.indiaScore.wickets}</td><td>${mt.oppScore.runs}/${mt.oppScore.wickets}</td>
+    <td><a class="link" onclick="showScorecard('${mt.id}')">${matchResult(mt).text}</a></td><td>${cap?esc(cap.name):'-'}</td></tr>`;
+  }).join('')}</table>
+  <div id="scorecard"></div>`;
+}
+function showScorecard(id){
+  const mt=DB.matches.find(x=>x.id===id);const opp=DB.opponents.find(o=>o.id===mt.opponentId);
+  const div=document.getElementById('scorecard');
+  div.innerHTML=`<div class="card"><h3>India vs ${esc(opp.name)} <span class="badge">${mt.format||'T20'}</span></h3>
+  <p>${mt.date} | ${mt.stage} (${mt.intensityMultiplier}x) | Captain: ${esc((DB.indiaPlayers.find(p=>p.id===mt.captainId)||{}).name||'-')} | ${matchResult(mt).text}</p>
+  <h4>India: ${mt.indiaScore.runs}/${mt.indiaScore.wickets} (${ballsToOvers(mt.indiaScore.balls)} ov)</h4>
+  <table><tr><th>Player</th><th>Runs</th><th>Balls</th><th>4s</th><th>6s</th><th>SR</th><th>Not Out</th></tr>
+  ${mt.indianBatting.map(b=>{const p=DB.indiaPlayers.find(x=>x.id===b.playerId);
+    return `<tr><td>${esc(p?p.name:'?')}</td><td>${b.runs}</td><td>${b.balls}</td><td>${b.fours}</td><td>${b.sixes}</td><td>${fmt(b.balls>0?b.runs/b.balls*100:0)}</td><td>${b.notOut?'*':''}</td></tr>`;}).join('')}
+  </table>
+  <h4>${esc(opp.name)}: ${mt.oppScore.runs}/${mt.oppScore.wickets} (${ballsToOvers(mt.oppScore.balls)} ov)</h4>
+  <table><tr><th>Player</th><th>Overs</th><th>Maidens</th><th>Runs</th><th>Wkts</th><th>Econ</th></tr>
+  ${mt.indianBowling.map(b=>{const p=DB.indiaPlayers.find(x=>x.id===b.playerId);
+    return `<tr><td>${esc(p?p.name:'?')}</td><td>${ballsToOvers(b.balls)}</td><td>${b.maidens}</td><td>${b.runs}</td><td>${b.wickets}</td><td>${fmt(economy(b.runs,b.balls))}</td></tr>`;}).join('')}
+  </table></div>`;
+}
+
+/* --- Points Table --- */
+function renderPoints(m){
+  const sel=params.seriesId||'';const fsel=params.format||'ALL';
+  m.innerHTML=`<h2>Points Table</h2>
+  <div class="row">
+  <div><label>Competition</label><select onchange="nav('points',{seriesId:this.value,format:'${fsel}'})">
+  <option value="">All matches</option>${DB.series.map(s=>`<option value="${s.id}" ${sel===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div>
+  <div><label>Format</label><select onchange="nav('points',{seriesId:'${sel}',format:this.value})">
+  ${['ALL',...FORMATS].map(f=>`<option value="${f}" ${fsel===f?'selected':''}>${f==='ALL'?'All Formats':f}</option>`).join('')}</select></div>
+  </div>
+  <div id="ptable"></div>`;
+  const ms=matchesByFormat(fsel).filter(x=>!sel||x.seriesId===sel);
+  const teams={INDIA:{name:'India',played:0,won:0,lost:0,tied:0,nr:0,points:0,runsFor:0,runsAg:0,ballsFor:0,ballsAg:0}};
+  ms.forEach(mt=>{
+    const opp=DB.opponents.find(o=>o.id===mt.opponentId);if(!opp)return;
+    if(!teams[opp.id])teams[opp.id]={name:opp.name,played:0,won:0,lost:0,tied:0,nr:0,points:0,runsFor:0,runsAg:0,ballsFor:0,ballsAg:0};
+    const r=matchResult(mt);const n=matchNRR(mt);
+    teams.INDIA.played++;teams[opp.id].played++;
+    teams.INDIA.runsFor+=mt.indiaScore.runs;teams.INDIA.runsAg+=mt.oppScore.runs;
+    teams.INDIA.ballsFor+=n.indiaBalls;teams.INDIA.ballsAg+=n.oppBalls;
+    teams[opp.id].runsFor+=mt.oppScore.runs;teams[opp.id].runsAg+=mt.indiaScore.runs;
+    teams[opp.id].ballsFor+=n.oppBalls;teams[opp.id].ballsAg+=n.indiaBalls;
+    if(r.type==='won'){teams.INDIA.won++;teams.INDIA.points+=2;teams[opp.id].lost++;}
+    else if(r.type==='lost'){teams.INDIA.lost++;teams[opp.id].won++;teams[opp.id].points+=2;}
+    else if(r.type==='tie'){teams.INDIA.tied++;teams[opp.id].tied++;teams.INDIA.points+=1;teams[opp.id].points+=1;}
+    else{teams.INDIA.nr++;teams[opp.id].nr++;teams.INDIA.points+=1;teams[opp.id].points+=1;}
+  });
+  const rows=Object.values(teams).map(t=>({...t,nrr:teamRunRate(t.runsFor,t.ballsFor)-teamRunRate(t.runsAg,t.ballsAg)}))
+    .sort((a,b)=>b.points-a.points||b.nrr-a.nrr);
+  document.getElementById('ptable').innerHTML=`<table><tr><th>Pos</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>T</th><th>NR</th><th>Pts</th><th>NRR</th></tr>
+  ${rows.map((t,i)=>`<tr><td>${i+1}</td><td>${esc(t.name)}</td><td>${t.played}</td><td>${t.won}</td><td>${t.lost}</td><td>${t.tied}</td><td>${t.nr}</td><td>${t.points}</td><td>${(t.nrr>=0?'+':'')+fmt(t.nrr)}</td></tr>`).join('')}
+  </table>`;
+}
+
+/* --- Orange / Purple Cap --- */
+function formatSelectorHtml(view){
+  const fsel=params.format||'ALL';
+  return `<div class="card"><label>Format</label><select onchange="nav('${view}',{format:this.value})">
+  ${['ALL',...FORMATS].map(f=>`<option value="${f}" ${fsel===f?'selected':''}>${f==='ALL'?'Overall':f}</option>`).join('')}</select></div>`;
+}
+function renderOrange(m){
+  const fsel=params.format||'ALL';
+  const rows=DB.indiaPlayers.map(p=>({p,c:battingCareer(p.id,fsel)})).filter(r=>r.c.runs>0).sort((a,b)=>b.c.runs-a.c.runs);
+  m.innerHTML=`<h2>${fsel==='ALL'?'Overall':fsel} Orange Cap</h2>${formatSelectorHtml('orange')}
+  <table><tr><th>Rank</th><th>Player</th><th>Runs</th><th>M</th><th>Inn</th><th>Avg</th><th>SR</th></tr>
+  ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.p.name)}</td><td>${r.c.runs}</td><td>${r.c.matches}</td><td>${r.c.innings}</td><td>${fmt(r.c.avg)}</td><td>${fmt(r.c.sr)}</td></tr>`).join('')}</table>`;
+}
+function renderPurple(m){
+  const fsel=params.format||'ALL';
+  const rows=DB.indiaPlayers.filter(canBowl).map(p=>({p,c:bowlingCareer(p.id,fsel)})).filter(r=>r.c.wkts>0).sort((a,b)=>b.c.wkts-a.c.wkts);
+  m.innerHTML=`<h2>${fsel==='ALL'?'Overall':fsel} Purple Cap</h2>${formatSelectorHtml('purple')}
+  <table><tr><th>Rank</th><th>Player</th><th>Wkts</th><th>M</th><th>Overs</th><th>Econ</th><th>Avg</th></tr>
+  ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.p.name)}</td><td>${r.c.wkts}</td><td>${r.c.matches}</td><td>${ballsToOvers(r.c.balls)}</td><td>${fmt(r.c.econ)}</td><td>${fmt(r.c.avg)}</td></tr>`).join('')}</table>`;
+}
+
+/* --- Rankings --- */
+function renderRankView(kind){
+  const m=document.getElementById('main');
+  const view=kind==='bat'?'battingrank':'bowlingrank';
+  const fsel=params.format||'ALL';
+  const rows=computeRankings(kind,fsel);
+  m.innerHTML=`<h2>${fsel==='ALL'?'Overall':fsel} ${kind==='bat'?'Batsman':'Bowler'} Rankings</h2>
+  ${formatSelectorHtml(view)}
+  <div class="card"><b>How Rankings Work:</b> ${kind==='bat'?
+    'Points = Runs×1.0 + 4s×1.5 + 6s×2.0 + (SR-100)×0.2 if SR&gt;100 + 20 for a 50 + 50 for a 100 + 10 if Not Out, all × Match Intensity (Series 1.00x, QF 1.25x, SF 1.50x, Final 1.75x). Missing a match decays points by 2% (compounding) per match missed since last participation; unplayed new players are unaffected.':
+    'Points = Wickets×25 + Maidens×5 + (6-Economy)×5 if Economy&lt;6 + 20 for a 3W haul + 35 for 4W + 50 for 5W, all × Match Intensity. Same match-based 2% compounding decay applies.'}
+  Rankings and decay are calculated independently per format — playing T10 does not reset T20 inactivity, and vice versa. "Overall" is computed from raw performance across all three formats, not an average of the three.</div>
+  <table><tr><th>Rank</th><th>Player</th><th>Points</th><th>Last Match</th><th>Matches Missed</th><th>Status</th></tr>
+  ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.player.name)}</td><td>${fmt(r.points,1)}</td><td>${r.lastMatch||'-'}</td><td>${r.missed}</td><td>${!r.hasPlayed?'New':(r.missed>0?'Inactive':'Active')}</td></tr>`).join('')}
+  </table>`;
+}
+
+/* --- Captaincy --- */
+function renderCaptaincy(m){
+  const fsel=params.format||'ALL';
+  const capIds=[...new Set(matchesByFormat(fsel).map(x=>x.captainId).filter(Boolean))];
+  const rows=capIds.map(cid=>({p:DB.indiaPlayers.find(x=>x.id===cid),rec:captaincyRecord(cid,fsel)})).filter(r=>r.p&&r.rec.matches>0);
+  m.innerHTML=`<h2>${fsel==='ALL'?'Overall':fsel} Captaincy Leaderboard</h2>
+  ${formatSelectorHtml('captaincy')}
+  <table><tr><th>Captain</th><th>Matches</th><th>Wins</th><th>Losses</th><th>Win %</th><th>NRR</th></tr>
+  ${rows.map(r=>`<tr><td><a class="link" onclick="showCaptainDetail('${r.p.id}','${fsel}')">${esc(r.p.name)}</a></td><td>${r.rec.matches}</td><td>${r.rec.wins}</td><td>${r.rec.losses}</td><td>${fmt(r.rec.winPct,1)}%</td><td>${(r.rec.nrr>=0?'+':'')+fmt(r.rec.nrr)}</td></tr>`).join('')}
+  </table><div id="capdetail"></div>`;
+}
+function showCaptainDetail(cid,fsel){
+  fsel=fsel||'ALL';
+  const p=DB.indiaPlayers.find(x=>x.id===cid);const rec=captaincyRecord(cid,fsel);
+  document.getElementById('capdetail').innerHTML=`<div class="card"><h3>${esc(p.name)} — ${fsel==='ALL'?'Overall':fsel} Captaincy Record</h3>
+  <p>Matches Captained: ${rec.matches} | Wins: ${rec.wins} | Losses: ${rec.losses} | Ties: ${rec.ties} | NR: ${rec.nr} | Win%: ${fmt(rec.winPct,1)} | Points: ${rec.points} | NRR: ${(rec.nrr>=0?'+':'')+fmt(rec.nrr)}</p>
+  <h4>Batting While Captain</h4>
+  <table><tr><th>Inn</th><th>Runs</th><th>Avg</th><th>SR</th><th>HS</th><th>50s</th><th>100s</th></tr>
+  <tr><td>${rec.bat.innings}</td><td>${rec.bat.runs}</td><td>${fmt(rec.bat.avg)}</td><td>${fmt(rec.bat.sr)}</td><td>${rec.bat.hs}</td><td>${rec.bat.fifties}</td><td>${rec.bat.hundreds}</td></tr></table>
+  ${canBowl(p)?`<h4>Bowling While Captain</h4><table><tr><th>Inn</th><th>Overs</th><th>Runs</th><th>Wkts</th><th>Econ</th></tr>
+  <tr><td>${rec.bowl.innings}</td><td>${ballsToOvers(rec.bowl.balls)}</td><td>${rec.bowl.runs}</td><td>${rec.bowl.wkts}</td><td>${fmt(rec.bowl.econ)}</td></tr></table>`:'<p>No bowling record — player is not eligible to bowl.</p>'}
+  <h4>Captaincy Matches</h4>
+  <table><tr><th>Date</th><th>Opponent</th><th>Stage</th><th>India</th><th>Opp</th><th>Result</th></tr>
+  ${rec.ms.map(mt=>{const opp=DB.opponents.find(o=>o.id===mt.opponentId);
+    return `<tr><td>${mt.date}</td><td>${esc(opp?opp.short:'?')}</td><td>${mt.stage}</td><td>${mt.indiaScore.runs}/${mt.indiaScore.wickets}</td><td>${mt.oppScore.runs}/${mt.oppScore.wickets}</td><td>${matchResult(mt).text}</td></tr>`;}).join('')}
+  </table></div>`;
+}
+
+/* --- Statistics leaderboards --- */
+function renderStats(m){
+  const fsel=params.format||'ALL';
+  const bat=DB.indiaPlayers.map(p=>({p,c:battingCareer(p.id,fsel)}));
+  const bowl=DB.indiaPlayers.filter(canBowl).map(p=>({p,c:bowlingCareer(p.id,fsel)}));
+  const sr=bat.filter(r=>r.c.balls>=100).sort((a,b)=>b.c.sr-a.c.sr).slice(0,10);
+  const avg=bat.filter(r=>r.c.dismissals>=5).sort((a,b)=>b.c.avg-a.c.avg).slice(0,10);
+  const most50=bat.filter(r=>r.c.fifties>0).sort((a,b)=>b.c.fifties-a.c.fifties).slice(0,10);
+  const most100=bat.filter(r=>r.c.hundreds>0).sort((a,b)=>b.c.hundreds-a.c.hundreds).slice(0,10);
+  const most4=bat.filter(r=>r.c.fours>0).sort((a,b)=>b.c.fours-a.c.fours).slice(0,10);
+  const most6=bat.filter(r=>r.c.sixes>0).sort((a,b)=>b.c.sixes-a.c.sixes).slice(0,10);
+  const econ=bowl.filter(r=>r.c.balls>=300).sort((a,b)=>a.c.econ-b.c.econ).slice(0,10);
+  const bavg=bowl.filter(r=>r.c.wkts>=10).sort((a,b)=>a.c.avg-b.c.avg).slice(0,10);
+  const sec=(title,rows,cols,get)=>`<div class="card"><h3>${title}</h3><table><tr><th>Player</th>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>
+  ${rows.map(r=>`<tr><td>${esc(r.p.name)}</td>${get(r).map(v=>`<td>${v}</td>`).join('')}</tr>`).join('')||'<tr><td colspan="'+(cols.length+1)+'">No qualifying players yet</td></tr>'}</table></div>`;
+  m.innerHTML=`<h2>${fsel==='ALL'?'Overall':fsel} Statistics</h2>${formatSelectorHtml('stats')}
+  <div class="card"><b>How Statistics Work:</b> Strike Rate = Runs/Balls×100. Average = Runs/Dismissals (N/A if 0 dismissals). Economy = Runs/(Balls/6). For NRR, a team all out before its format's full over quota (T10: 10 ov/60 balls, T20: 20 ov/120 balls, T30: 30 ov/180 balls) is treated as having used the full quota for that format.</div>
+  ${sec('Highest Strike Rate (min 100 balls)',sr,['SR'],r=>[fmt(r.c.sr)])}
+  ${sec('Highest Batting Average (min 5 dismissals)',avg,['Avg'],r=>[fmt(r.c.avg)])}
+  ${sec('Most 50s',most50,['50s'],r=>[r.c.fifties])}
+  ${sec('Most 100s',most100,['100s'],r=>[r.c.hundreds])}
+  ${sec('Most 4s',most4,['4s'],r=>[r.c.fours])}
+  ${sec('Most 6s',most6,['6s'],r=>[r.c.sixes])}
+  ${sec('Best Economy (min 50 overs)',econ,['Econ'],r=>[fmt(r.c.econ)])}
+  ${sec('Best Bowling Average (min 10 wkts)',bavg,['Avg'],r=>[fmt(r.c.avg)])}`;
+}
+
+/* --- Settings --- */
+function renderSettings(m){
+  m.innerHTML=`<h2>Settings</h2>
+  <div class="card"><button class="btn" onclick="exportData()">Export Data</button>
+  <input type="file" id="importFile" style="display:none" onchange="importData(event)">
+  <button class="btn secondary" onclick="document.getElementById('importFile').click()">Import Data</button>
+  <button class="btn secondary" onclick="loadDemo()">Load Demo Data</button>
+  <button class="btn secondary" onclick="resetData()">Reset Data</button></div>
+  <div class="card"><b>Rules Reference</b><p style="font-size:12px;color:var(--muted)">
+  Supported formats: T10 (max 10.0 overs / 60 balls), T20 (max 20.0 overs / 120 balls), T30 (max 30.0 overs / 180 balls). No ODI or Test.<br>
+  Ball conversion: 4.2 overs = 26 balls (ball digit 0-5 only) in every format.<br>
+  India Score → Indian Batting. Opponent Score → Indian Bowling. Everyone can bat; only Bowlers/All-Rounders can bowl.<br>
+  Playing XI participation = Matches Played, independent of batting/bowling entries, tracked per format.<br>
+  Ranking decay is match-based (2% compounding per relevant-format match missed) and calculated independently per format — playing T10 does not reset T20 inactivity.<br>
+  Captaincy records track only the captain's own batting/bowling plus India's team result, separated by format, with an Overall view combining raw data across formats.</p></div>`;
+}
+function exportData(){
+  const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='india-t20-universe-backup.json';a.click();
+}
+function importData(ev){
+  const f=ev.target.files[0];if(!f)return;
+  const reader=new FileReader();
+  reader.onload=e=>{try{const data=JSON.parse(e.target.result);
+    LS_KEYS.forEach(k=>{if(data[k]!==undefined)DB[k]=data[k];});saveAll();alert('Import successful.');render();
+  }catch(err){alert('Invalid file.');}};
+  reader.readAsText(f);
+}
+function resetData(){
+  if(confirm('This will delete ALL data. Continue?')){DB={indiaPlayers:[],opponents:[],series:[],matches:[],settings:{}};saveAll();render();}
+}
+function loadDemo(){
+  DB.indiaPlayers=[
+    {id:'p1',name:'Shubman Gill',role:'Batter',active:true},
+    {id:'p2',name:'Yashasvi Jaiswal',role:'Batter',active:true},
+    {id:'p3',name:'Suryakumar Yadav',role:'Batter',active:true},
+    {id:'p4',name:'Hardik Pandya',role:'All-Rounder',active:true},
+    {id:'p5',name:'Ravindra Jadeja',role:'All-Rounder',active:true},
+    {id:'p6',name:'Rishabh Pant',role:'Wicketkeeper',active:true},
+    {id:'p7',name:'Axar Patel',role:'All-Rounder',active:true},
+    {id:'p8',name:'Kuldeep Yadav',role:'Bowler',active:true},
+    {id:'p9',name:'Jasprit Bumrah',role:'Bowler',active:true},
+    {id:'p10',name:'Arshdeep Singh',role:'Bowler',active:true},
+    {id:'p11',name:'Mohammed Siraj',role:'Bowler',active:true},
+    {id:'p12',name:'Shivam Dube',role:'All-Rounder',active:true}
+  ];
+  DB.opponents=[{id:'o1',name:'Bangladesh',short:'BAN'},{id:'o2',name:'Australia',short:'AUS'},{id:'o3',name:'England',short:'ENG'}];
+  DB.series=[{id:'s1',name:'India vs Bangladesh - 3 Match T20 Series',type:'Bilateral',start:'2026-01-01',end:'2026-01-10'},
+    {id:'s2',name:'India vs England - T30 Series',type:'Bilateral',start:'2026-02-01',end:'2026-02-10'},
+    {id:'s3',name:'India vs Bangladesh - T10 Series',type:'Bilateral',start:'2026-03-01',end:'2026-03-05'}];
+  const xi=id=>['p1','p2','p3','p4','p5','p6','p7','p8','p9','p10','p11'].map(pid=>({playerId:pid,played:true,captain:pid===id}));
+  DB.matches=[
+    {id:'m1',date:'2026-01-01',format:'T20',seriesId:'s1',opponentId:'o1',stage:'Series Match',intensityMultiplier:1.0,captainId:'p1',
+     playingXI:xi('p1'),indiaScore:{runs:187,wickets:6,balls:120},oppScore:{runs:164,wickets:9,balls:120},
+     indianBatting:[{playerId:'p1',runs:72,balls:48,fours:6,sixes:2,notOut:false},{playerId:'p2',runs:41,balls:29,fours:4,sixes:1,notOut:false},{playerId:'p6',runs:35,balls:20,fours:2,sixes:2,notOut:true}],
+     indianBowling:[{playerId:'p9',balls:24,maidens:0,runs:25,wickets:3},{playerId:'p11',balls:24,maidens:0,runs:41,wickets:2},{playerId:'p8',balls:24,maidens:0,runs:32,wickets:2}],
+     result:{type:'won',text:'India won by 23 runs'}},
+    {id:'m2',date:'2026-01-04',format:'T20',seriesId:'s1',opponentId:'o1',stage:'Series Match',intensityMultiplier:1.0,captainId:'p1',
+     playingXI:[...xi('p1').slice(0,10),{playerId:'p12',played:true,captain:false}],indiaScore:{runs:176,wickets:8,balls:120},oppScore:{runs:180,wickets:5,balls:118},
+     indianBatting:[{playerId:'p1',runs:42,balls:33,fours:3,sixes:1,notOut:false},{playerId:'p3',runs:55,balls:34,fours:5,sixes:2,notOut:false}],
+     indianBowling:[{playerId:'p9',balls:24,maidens:0,runs:30,wickets:1},{playerId:'p7',balls:24,maidens:0,runs:38,wickets:1}],
+     result:{type:'lost',text:'India lost by 5 wickets'}},
+    {id:'m3',date:'2026-01-07',format:'T20',seriesId:'s1',opponentId:'o1',stage:'Final',intensityMultiplier:1.75,captainId:'p1',
+     playingXI:xi('p1'),indiaScore:{runs:201,wickets:4,balls:120},oppScore:{runs:190,wickets:8,balls:120},
+     indianBatting:[{playerId:'p1',runs:91,balls:52,fours:8,sixes:3,notOut:true},{playerId:'p2',runs:38,balls:27,fours:4,sixes:1,notOut:false}],
+     indianBowling:[{playerId:'p9',balls:24,maidens:1,runs:22,wickets:4},{playerId:'p10',balls:24,maidens:0,runs:35,wickets:2}],
+     result:{type:'won',text:'India won by 11 runs'}},
+    {id:'m4',date:'2026-02-01',format:'T30',seriesId:'s2',opponentId:'o3',stage:'Series Match',intensityMultiplier:1.0,captainId:'p1',
+     playingXI:xi('p1'),indiaScore:{runs:248,wickets:7,balls:180},oppScore:{runs:230,wickets:9,balls:180},
+     indianBatting:[{playerId:'p1',runs:95,balls:66,fours:9,sixes:2,notOut:false},{playerId:'p3',runs:60,balls:40,fours:5,sixes:2,notOut:false},{playerId:'p6',runs:44,balls:25,fours:3,sixes:2,notOut:true}],
+     indianBowling:[{playerId:'p9',balls:36,maidens:1,runs:38,wickets:3},{playerId:'p8',balls:36,maidens:0,runs:45,wickets:2},{playerId:'p11',balls:36,maidens:0,runs:52,wickets:2}],
+     result:{type:'won',text:'India won by 18 runs'}},
+    {id:'m5',date:'2026-02-05',format:'T30',seriesId:'s2',opponentId:'o3',stage:'Final',intensityMultiplier:1.75,captainId:'p1',
+     playingXI:xi('p1'),indiaScore:{runs:260,wickets:5,balls:180},oppScore:{runs:255,wickets:8,balls:180},
+     indianBatting:[{playerId:'p1',runs:110,balls:72,fours:10,sixes:3,notOut:true},{playerId:'p2',runs:48,balls:35,fours:4,sixes:1,notOut:false}],
+     indianBowling:[{playerId:'p9',balls:36,maidens:0,runs:48,wickets:2},{playerId:'p10',balls:36,maidens:0,runs:51,wickets:3}],
+     result:{type:'won',text:'India won by 5 runs'}},
+    {id:'m6',date:'2026-03-01',format:'T10',seriesId:'s3',opponentId:'o1',stage:'Series Match',intensityMultiplier:1.0,captainId:'p1',
+     playingXI:xi('p1'),indiaScore:{runs:95,wickets:3,balls:60},oppScore:{runs:80,wickets:6,balls:60},
+     indianBatting:[{playerId:'p1',runs:38,balls:19,fours:4,sixes:2,notOut:true},{playerId:'p2',runs:29,balls:15,fours:2,sixes:2,notOut:false}],
+     indianBowling:[{playerId:'p9',balls:12,maidens:0,runs:14,wickets:2},{playerId:'p8',balls:12,maidens:0,runs:18,wickets:2}],
+     result:{type:'won',text:'India won by 15 runs'}},
+    {id:'m7',date:'2026-03-03',format:'T10',seriesId:'s3',opponentId:'o1',stage:'Final',intensityMultiplier:1.75,captainId:'p1',
+     playingXI:xi('p1'),indiaScore:{runs:88,wickets:4,balls:60},oppScore:{runs:90,wickets:5,balls:58},
+     indianBatting:[{playerId:'p1',runs:31,balls:17,fours:3,sixes:1,notOut:false},{playerId:'p6',runs:25,balls:12,fours:1,sixes:2,notOut:true}],
+     indianBowling:[{playerId:'p9',balls:12,maidens:0,runs:20,wickets:1},{playerId:'p7',balls:12,maidens:0,runs:16,wickets:2}],
+     result:{type:'lost',text:'India lost by 5 wickets'}}
+  ];
+  saveAll();alert('Demo data loaded (T10, T20 and T30 matches included).');nav('dashboard');
+}
+
+/* expose functions used inline */
+Object.assign(window,{addPlayer,editPlayer,toggleActive,deletePlayer,addOpponent,deleteOpponent,addSeries,deleteSeries,
+  toggleXI,setCaptain,setBalls,addBatting,removeBatting,addBowling,removeBowling,saveMatch,newDraft,showScorecard,
+  showCaptainDetail,exportData,importData,resetData,loadDemo,draftMatch});
+
+/* init */
+if(!DB.indiaPlayers.length&&!DB.matches.length){ /* first run: leave empty, user can Load Demo Data */ }
+render();
+</script>
+</body>
+</html>
